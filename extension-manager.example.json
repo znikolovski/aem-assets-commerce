@@ -1,6 +1,6 @@
 {
-  "connectionId": "my-store",
   "commerceUrl": "https://commerce.example.com",
+  "commerceToken": "REPLACE_WITH_COMMERCE_CATALOG_INTEGRATION_TOKEN",
   "storeCode": "default",
   "productsRoot": "/content/dam/products"
 }

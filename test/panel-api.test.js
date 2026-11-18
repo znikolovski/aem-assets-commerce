@@ -93,3 +93,24 @@ test('picks up a new connection and store from Extension Manager without rebuild
   expect(body).not.toHaveProperty('commerceToken');
   expect(body).not.toHaveProperty('storeCode');
 });
+
+test('reads direct Commerce credentials afresh after Extension Manager changes without a build', async () => {
+  guest.configuration = {
+    commerceUrl: 'https://first.example.com', commerceToken: 'first-catalog-token',
+    storeCode: 'default', productsRoot: '/content/dam/products',
+  };
+  await callAssets(guest, 'asset.get', { assetPath: path });
+  const first = JSON.parse(global.fetch.mock.calls[0][1].body);
+  expect(first).toMatchObject(guest.configuration);
+  expect(first).not.toHaveProperty('connectionId');
+  guest.configuration = {
+    commerceUrl: 'https://second.example.com/shop', commerceToken: 'rotated-catalog-token',
+    storeCode: 'fr', productsRoot: '/content/dam/products/shoes',
+  };
+  global.fetch.mockResolvedValueOnce(Response.json({ items: [], total: 0 }));
+  await callAssets(guest, 'products.search', { q: 'shoe' });
+  const second = JSON.parse(global.fetch.mock.calls[1][1].body);
+  expect(second).toMatchObject({ ...guest.configuration, assetPath: path });
+  expect(JSON.stringify(second)).not.toContain('first-catalog-token');
+  expect(global.fetch.mock.calls[1][1].headers.Authorization).toBe('Bearer test-token');
+});

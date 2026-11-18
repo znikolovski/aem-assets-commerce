@@ -18,9 +18,11 @@ The original demo deployment is not changed by installing this app.
   `commerce:roles`, and `commerce:positions` in AEM.
 - Preserves SKU case, editorial metadata, approval, and existing localized alt text.
 - Lets admins choose a Commerce instance, store view, and DAM subtree in
-  Extension Manager without rebuilding the frontend.
-- Keeps Commerce tokens server-side. The current Assets user's permissions
-  control all AEM reads and writes; the app never uses a privileged AEM identity.
+  Extension Manager without rebuilding or redeploying the app.
+- Accepts connection details directly from Extension Manager, with optional
+  server-side profiles for installations that must keep tokens out of the browser.
+- Uses the current Assets user's permissions for all AEM reads and writes;
+  the app never uses a privileged AEM identity.
 
 **Saving is not immediate Commerce synchronization.** This app does not upload
 image copies, modify Commerce product galleries directly, or provide a custom
@@ -67,10 +69,27 @@ frontend configuration. The repository intentionally contains none of those.
 Use a new App Builder project for this standalone app; it deploys its own static
 bundle and is not intended to share a workspace CDN with an unrelated app.
 
-## 2. Add trusted server-side connections
+## 2. Choose a connection configuration mode
 
-Edit `ASSETS_COMMERCE_CONNECTIONS` in `.env` using the JSON structure in
-[.env.example](.env.example). It is a map keyed by a public connection identifier:
+**Default: Extension Manager configuration.** Leave
+`ASSETS_COMMERCE_CONNECTIONS='{}'` in [.env.example](.env.example). After the
+one-time app deployment, set `commerceUrl` and `commerceToken` using Extension
+Manager's **Configure > Add variable** mechanism (see step 4). You can add or
+change the instance URL, token, store view, and DAM folder there without editing
+`.env`, running a build, or deploying an action.
+
+**Credential visibility:** Extension Manager variables are delivered to the
+extension in the user's browser; they are **not a secret store**. Users who can
+run the panel can inspect the Commerce token. Use a dedicated, least-privilege
+catalog integration token and rotate it in Extension Manager when necessary.
+Do not use a personal admin token, IMS token, or credential with write access.
+If your Commerce ACL cannot provide a suitably restricted credential, use a
+read-only gateway or the optional server-side mode below instead.
+
+### Optional: server-side profiles
+
+For tokens that must remain server-only, edit `ASSETS_COMMERCE_CONNECTIONS` in
+`.env` using this map keyed by a public connection identifier:
 
 ```json
 {
@@ -94,16 +113,16 @@ Add a second entry such as `another-store` for another Commerce instance, with
 its own token, IMS organization, AEM author, and allowed store codes. Only
 authorized users of the configured AEM subtree can use that profile.
 
-This server allowlist is intentional: Extension Manager parameters are
-browser-visible and are not a safe place for secrets or arbitrary destinations
-that receive server credentials. Onboarding a **new destination or rotating a
-token** requires updating the server profile and redeploying its action. After
-onboarding, switching between trusted profiles/store views/folder subtrees in
-Extension Manager requires **no code change, build or deployment**.
+In this optional mode, `connectionId` selects a profile. Its token cannot be
+overridden or redirected using browser configuration. Adding a server-only
+profile or rotating its token requires updating the server profile and
+redeploying its action. This restriction does **not** apply to the default
+Extension Manager mode.
 
-Only configure public HTTPS destinations you control. Do not configure internal
-services, metadata endpoints or shared untrusted DNS names. Redirects are rejected
-on both Commerce and AEM requests.
+Only configure public HTTPS destinations you control. Direct-mode Commerce
+requests reject private/reserved IP addresses during DNS resolution, pin the
+validated addresses at socket connection time, and limit responses to 2 MiB.
+Redirects are rejected on both Commerce and AEM requests.
 
 ## 3. Build, deploy, and register
 
@@ -139,40 +158,60 @@ published app or overwriting its extension points with `--force-publish`.
 
 Open the extension's **gear / Configure** action, choose **Add variable**, and
 enter these key/value pairs. They are read from `guestConnection.configuration`
-for **every request**, so reopening the panel picks up configuration changes.
+for **every request**. Save the Extension Manager configuration and reopen the
+panel to ensure the host supplies the updated values.
 Use plain text values, not JSON-encoded strings.
+
+### Direct configuration (default, no server profile)
 
 | Key | Required | Example | Behavior |
 | --- | --- | --- | --- |
-| `connectionId` | Yes | `my-store` | Selects the server-side profile and its bound credentials. |
-| `commerceUrl` | No | `https://commerce.example.com` | Optional explicit instance URL; must match the selected profile. Omit to use that profile's URL. |
-| `storeCode` | No | `fr` | Selects an allowed Commerce store view; defaults to the profile's first code. |
-| `productsRoot` | No | `/content/dam/products/shoes` | Narrows the allowed DAM subtree. Cannot broaden the profile's root. |
+| `commerceUrl` | Yes | `https://commerce.example.com` | Commerce installation base URL, optionally including its subdirectory. |
+| `commerceToken` | Yes | Your restricted catalog integration token | Browser-visible bearer credential, sent only to that Commerce instance over HTTPS. |
+| `storeCode` | No | `fr` | Commerce store view; defaults to `default`. |
+| `productsRoot` | No | `/content/dam/products/shoes` | DAM subtree for asset linking; defaults to `/content/dam/products`. AEM user permissions still apply. |
+
+Omit/remove `connectionId` to use this mode. The AEM author URL and Adobe user
+identity come from the Assets host automatically. Direct mode only accepts AEM
+Cloud Service author hosts (`author-p<program>-e<environment>.adobeaemcloud.com`);
+you do not need to configure an IMS organization or AEM URL.
 
 [extension-manager.example.json](extension-manager.example.json) is a reference,
-not an Extension Manager import payload. **Do not add `commerceToken`, IMS
-tokens, API secrets, or the server JSON to Extension Manager.**
-The panel displays an actionable setup error if `connectionId` is missing.
+not an Extension Manager import payload. Never commit a populated token to Git.
+The panel displays an actionable setup error if the URL or token is missing.
+
+### Optional server-profile configuration
+
+| Key | Required | Example | Behavior |
+| --- | --- | --- | --- |
+| `connectionId` | Yes | `my-store` | Selects the server profile and its bound credentials. |
+| `commerceUrl` | No | `https://commerce.example.com` | Must match the selected profile; omit to use its URL. |
+| `storeCode` | No | `fr` | Must be allowed by the profile; defaults to its first code. |
+| `productsRoot` | No | `/content/dam/products/shoes` | May narrow but never broaden the profile's root. |
+
+Do not set `commerceToken` in this mode; the frontend does not forward it.
+An invalid `connectionId` displays an error rather than falling back to direct
+mode. Remove `connectionId` explicitly to switch modes.
 
 ### Point the extension at another instance
 
-1. An App Builder administrator adds the instance and its credential as a
-   server connection, e.g. `another-store`, and deploys the action.
-2. In Extension Manager set `connectionId=another-store`, optionally change
-   `commerceUrl`, and select an allowed `storeCode`.
-3. Reopen the panel, search a known SKU, and verify that it comes from the new
+1. In Extension Manager, remove `connectionId` if set.
+2. Set `commerceUrl` and `commerceToken` for the new instance; set its `storeCode`
+   and `productsRoot` as needed, then save the configuration.
+3. Reopen the panel, search a known SKU, and verify it comes from the new
    instance before saving a mapping.
 
-The new connection must match the current AEM author and user organization.
-Changing `commerceUrl` alone cannot redirect a profile's token to a different
-server. Authorization errors are displayed instead.
+No build, action redeployment, catalog import, or `.env` update is required.
+Rotate a direct-mode token by updating `commerceToken` in the same way.
+If using server profiles instead, onboard the instance on the server first,
+then select its `connectionId`.
 
 ## 5. Prepare AEM metadata and synchronization
 
 Install Adobe's Commerce metadata namespace/schema resources as part of the
 AEM Assets Integration onboarding. In **Assets View > Settings > Metadata
 Forms**, preserve existing editorial tabs and add/assign a Commerce tab to the
-profile's product folder.
+configured product folder.
 
 [aem-config/commerce-metadata-form.spec.json](aem-config/commerce-metadata-form.spec.json)
 is a **manual blueprint**, not an Adobe package/import payload. Use bare property
@@ -222,7 +261,9 @@ npm run test:coverage
 npm run build
 ```
 
-Tests cover Extension Manager settings, trusted-profile selection, REST query
+Tests cover direct Extension Manager connections and token rotation without
+server configuration, optional trusted-profile selection, public DNS enforcement,
+REST query
 encoding, hidden variants, SKU case, credential separation, org/author/path
 boundaries, AEM permission checks before catalog access, typed metadata writes,
 read-back failure, conflict handling, simplified UI and cancellation.
@@ -235,18 +276,26 @@ Before enabling in production, preview in your environment and verify:
 - Save a test asset with two SKUs/positions, reopen it, and verify metadata types.
 - Confirm title, description, approval and localized alt text are unchanged.
 - Wait for native synchronization and check the Commerce product gallery.
-- Test unlinking, insufficient AEM permissions, and a mismatched connection URL.
+- Test unlinking, insufficient AEM permissions, and invalid connection details.
+- Change the Commerce URL/token in Extension Manager without redeploying, then
+  confirm search uses the new instance.
 - Test narrow panel widths, keyboard navigation, and light/dark themes.
 
 ### Operational details
 
 The Runtime gateway validates Adobe authentication (`require-adobe-auth`).
-The action also checks the configured IMS organization and uses the caller's
-token to read the selected asset **before any Commerce request**; a caller-supplied
+The action uses the caller's token to read the selected asset **before any
+Commerce request**; a caller-supplied
 organization header alone is not authorization. Any user who can read the allowed
-AEM asset can search the profile's read-only Commerce catalog. Saving additionally
+AEM asset and has the configured token can search the Commerce catalog. Saving additionally
 requires AEM write permission. Restrict the DAM root accordingly.
+Optional server profiles additionally bind the organization, AEM author, store
+views, folder and Commerce destination. Direct-mode folder configuration is not
+an access-control boundary: AEM ACLs enforce actual access.
 Manifest `final: true` prevents callers from replacing injected server inputs.
+Direct-mode Commerce tokens travel in authenticated HTTPS request bodies to the
+action and are not returned or logged by app code. They remain visible in browser
+configuration/network tools; apply your Runtime activation-retention policy too.
 
 AEM metadata uses Sling POST and read-back verification on the selected asset,
 matching the original extension's working transport. The user token/client ID

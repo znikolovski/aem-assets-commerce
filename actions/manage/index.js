@@ -28,7 +28,7 @@ async function main(params) {
     }
     const identity = { token, apiKey: input.apiKey };
     // The organization header alone is not authorization. Gate even catalog searches
-    // on a real AEM read with this user's token and the profile's allowed asset root.
+    // on a real AEM read with this user's token and the configured asset root.
     const asset = await readAsset(connection, identity, input.assetPath);
     if (input.op === 'asset.get') return response(200, assetResult(asset));
     if (input.op === 'products.search') return response(200, await searchProducts(connection, input));
