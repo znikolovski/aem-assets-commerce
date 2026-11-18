@@ -1,0 +1,8 @@
+{
+  "plugins": ["@babel/plugin-transform-react-jsx"],
+  "env": {
+    "test": {
+      "presets": [["@babel/preset-env", { "targets": { "node": "current" } }]]
+    }
+  }
+}

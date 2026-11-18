@@ -1,0 +1,24 @@
+operations:
+  view:
+    - type: web
+      impl: index.html
+actions: actions
+web: web-src
+runtimeManifest:
+  packages:
+    assets-commerce:
+      license: UNLICENSED
+      inputs:
+        LOG_LEVEL: info
+        CONNECTIONS_JSON: $ASSETS_COMMERCE_CONNECTIONS
+      actions:
+        manage:
+          function: actions/manage/index.js
+          web: 'yes'
+          runtime: nodejs:22
+          annotations:
+            require-adobe-auth: true
+            final: true
+          limits:
+            timeout: 60000
+            memorySize: 512

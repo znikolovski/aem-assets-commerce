@@ -1,0 +1,6 @@
+{
+  "connectionId": "my-store",
+  "commerceUrl": "https://commerce.example.com",
+  "storeCode": "default",
+  "productsRoot": "/content/dam/products"
+}

@@ -1,0 +1,3 @@
+extensions:
+  aem/assets/assetsview/1:
+    $include: ./ext.config.yaml
