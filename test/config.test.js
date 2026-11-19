@@ -49,7 +49,7 @@ const direct = {
 };
 test('configures a new instance entirely from Extension Manager without server profiles', () => {
   expect(resolveConnection({}, direct, profile.imsOrg)).toEqual({
-    ...direct, storeCode: 'default', productsRoot: '/content/dam/products', publicOnly: true,
+    ...direct, commerceType: 'paas', storeCode: 'default', productsRoot: '/content/dam/products', publicOnly: true,
   });
   expect(resolveConnection(params, { ...direct, connectionId: '', storeCode: 'fr', productsRoot: '/content/dam/catalog' }, profile.imsOrg)).toMatchObject({
     commerceToken: direct.commerceToken, storeCode: 'fr', productsRoot: '/content/dam/catalog',
@@ -76,4 +76,61 @@ test('does not fall back from an invalid profile or forward client tokens in pro
   expect(() => resolveConnection({}, direct)).toThrow('organization');
   expect(() => readSettings({ configuration: { ...direct, connectionId: 123 } })).toThrow('connectionId');
   expect(() => readSettings({ configuration: { ...direct, commerceToken: 123 } })).toThrow('commerceToken');
+});
+
+const accs = {
+  authorUrl: direct.authorUrl, commerceUrl: 'https://na1-sandbox.api.commerce.adobe.com/tenant-123',
+};
+test('defaults new tokenless connections to ACCS and the host IMS identity', () => {
+  expect(resolveConnection({}, accs, profile.imsOrg)).toEqual({
+    ...accs, commerceType: 'accs', authMode: 'user', imsOrg: profile.imsOrg,
+    publicOnly: true, productsRoot: '/content/dam/products', storeCode: 'default',
+  });
+  expect(readSettings({ configuration: { commerceUrl: accs.commerceUrl } })).toEqual({ commerceUrl: accs.commerceUrl });
+  expect(readSettings({ configuration: { commerceType: 'accs', commerceUrl: accs.commerceUrl, commerceClientId: 'commerce-client' } })).toMatchObject({
+    commerceType: 'accs', commerceClientId: 'commerce-client',
+  });
+});
+test.each([
+  { commerceUrl: 'https://shop.example.com/tenant' },
+  { commerceUrl: 'https://na1.api.commerce.adobe.com.attacker.example.com/tenant' },
+  { commerceUrl: 'https://na1.api.commerce.adobe.com' },
+  { commerceUrl: 'https://na1.api.commerce.adobe.com/tenant/V1' },
+  { commerceUrl: 'https://na1.api.commerce.adobe.com/tenant/rest/default' },
+  { commerceUrl: 'https://na1.api.commerce.adobe.com/tenant?redirect=1' },
+  { commerceType: 'saas' }, { authMode: 'server' }, { authMode: 'automatic' },
+  { commerceClientId: 'bad\nclient' }, { commerceClientSecret: 'must-not-be-sent' },
+  { commerceType: 'accs', commerceToken: 'not-an-ims-flow' },
+])('rejects invalid ACCS configuration before forwarding an Adobe identity %j', (override) => {
+  expect(() => resolveConnection({}, { ...accs, ...override }, profile.imsOrg)).toThrow();
+});
+test('does not send OAuth client secrets from Extension Manager or misroute ACCS through PaaS', () => {
+  expect(() => readSettings({ configuration: { commerceUrl: accs.commerceUrl, commerceClientSecret: 'secret' } })).toThrow('server-side');
+  expect(() => readSettings({ configuration: { commerceUrl: accs.commerceUrl, commerceType: 'saas' } })).toThrow('commerceType');
+  expect(() => readSettings({ configuration: { commerceUrl: accs.commerceUrl, commerceType: 'accs', commerceToken: 'legacy' } })).toThrow('Remove commerceToken');
+  expect(() => readSettings({ configuration: { commerceType: 'paas', commerceUrl: profile.commerceUrl } })).toThrow('commerceToken');
+  expect(() => resolveConnection({}, { ...accs, commerceToken: 'legacy' }, profile.imsOrg)).toThrow('commerceType=accs');
+});
+test('binds service credentials and the ACCS tenant to a server profile', () => {
+  const serviceProfile = {
+    ...profile, commerceType: 'accs', commerceUrl: accs.commerceUrl, commerceToken: undefined,
+    authMode: 'server', commerceClientId: 'service-client', commerceClientSecret: 'server-secret',
+  };
+  const server = { CONNECTIONS_JSON: JSON.stringify({ accs: serviceProfile }) };
+  const request = { ...input, connectionId: 'accs', storeCode: 'fr' };
+  expect(resolveConnection(server, request, profile.imsOrg)).toMatchObject({
+    commerceType: 'accs', authMode: 'server', imsOrg: profile.imsOrg,
+    commerceClientId: 'service-client', commerceClientSecret: 'server-secret', storeCode: 'fr',
+  });
+  for (const override of [
+    { commerceType: 'paas' }, { commerceClientId: 'untrusted' }, { commerceUrl: 'https://na1.api.commerce.adobe.com/another-tenant' },
+  ]) {
+    expect(() => resolveConnection(server, { ...request, ...override }, profile.imsOrg)).toThrow();
+  }
+  for (const override of [{ commerceClientSecret: undefined }, { commerceClientId: undefined }, { authMode: 'automatic' }]) {
+    expect(() => resolveConnection({ CONNECTIONS_JSON: JSON.stringify({ accs: { ...serviceProfile, ...override } }) }, request, profile.imsOrg)).toThrow();
+  }
+  expect(() => resolveConnection({
+    CONNECTIONS_JSON: JSON.stringify({ accs: { ...serviceProfile, authMode: 'user' } }),
+  }, request, profile.imsOrg)).toThrow('server-side profile');
 });

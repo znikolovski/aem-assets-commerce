@@ -1,6 +1,6 @@
 {
-  "commerceUrl": "https://commerce.example.com",
-  "commerceToken": "REPLACE_WITH_COMMERCE_CATALOG_INTEGRATION_TOKEN",
+  "commerceType": "accs",
+  "commerceUrl": "https://na1-sandbox.api.commerce.adobe.com/YOUR_TENANT_ID",
   "storeCode": "default",
   "productsRoot": "/content/dam/products"
 }

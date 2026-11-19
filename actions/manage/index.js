@@ -31,7 +31,7 @@ async function main(params) {
     // on a real AEM read with this user's token and the configured asset root.
     const asset = await readAsset(connection, identity, input.assetPath);
     if (input.op === 'asset.get') return response(200, assetResult(asset));
-    if (input.op === 'products.search') return response(200, await searchProducts(connection, input));
+    if (input.op === 'products.search') return response(200, await searchProducts(connection, input, identity));
     return response(200, await saveAsset(connection, identity, input));
   } catch (error) {
     const expected = error instanceof AppError;

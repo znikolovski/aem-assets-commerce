@@ -1,7 +1,8 @@
 # AEM Assets Commerce
 
-A standalone Adobe App Builder extension that lets AEM Assets users find Adobe
-Commerce products and associate the current asset with product or variant SKUs.
+A standalone Adobe App Builder extension primarily for **Adobe Commerce as a
+Cloud Service (ACCS)**. AEM Assets users can find products and associate the current
+asset with product or variant SKUs. Adobe Commerce PaaS remains supported.
 The Assets Details panel uses native React Spectrum controls, compact product
 rows, on-demand gallery-position editing, and collapsed image settings.
 
@@ -19,8 +20,10 @@ The original demo deployment is not changed by installing this app.
 - Preserves SKU case, editorial metadata, approval, and existing localized alt text.
 - Lets admins choose a Commerce instance, store view, and DAM subtree in
   Extension Manager without rebuilding or redeploying the app.
-- Accepts connection details directly from Extension Manager, with optional
-  server-side profiles for installations that must keep tokens out of the browser.
+- Defaults to ACCS and the current Adobe IMS user identity, without a manually
+  configured Commerce token when that session is authorized for Commerce.
+- Supports explicit server-side ACCS OAuth service accounts with automatic token
+  renewal, plus legacy PaaS integration tokens.
 - Uses the current Assets user's permissions for all AEM reads and writes;
   the app never uses a privileged AEM identity.
 
@@ -37,9 +40,15 @@ the native integration does not provide per-store-view image assignment.
 
 - AEM Assets as a Cloud Service with **Assets View extensibility enabled** and
   the required Assets Ultimate entitlement.
-- Adobe Commerce on cloud infrastructure or on-premises (PaaS), exposing the
+- **Primary: ACCS**, exposing `https://<region>.api.commerce.adobe.com/<tenant-id>`.
+  Requests use `/V1/products`, the `Store` header, an IMS access token, the OAuth
+  client ID (`x-api-key`), and IMS organization (`x-gw-ims-org-id`).
+- ACCS authentication: an authorized user session or OAuth Server-to-Server
+  credentials with the `commerce.accs` scope and catalog read permissions in the
+  target Commerce environment.
+- **Also supported: Adobe Commerce PaaS** on cloud infrastructure or on-premises, exposing the
   standard Magento 2 REST API at `/rest/{storeCode}/V1/products`.
-- A Commerce integration token scoped to **Catalog > Products**. This app makes
+- For PaaS, a Commerce integration token scoped to **Catalog > Products**. This app makes
   only GET requests to Commerce. If your standard Commerce ACL grants product
   writes too, use a custom read-only role or GET-only gateway restriction when
   strict credential-level read-only access is required.
@@ -49,10 +58,8 @@ the native integration does not provide per-store-view image assignment.
 - Node.js 22+ for development, Adobe I/O CLI, an App Builder project/workspace,
   and permission to deploy/register AEM UI extensions.
 
-Adobe Commerce as a Cloud Service (SaaS) uses different REST URLs and IMS
-authentication. It is **not supported by this PaaS adapter**. This app also does
-not implement OAuth 1.0 signing for installations that disallow bearer
-integration tokens. Do not point these environments at the PaaS connection URL.
+The PaaS adapter does not implement OAuth 1.0 signing for installations that
+disallow bearer integration tokens. ACCS does not use this legacy token mechanism.
 
 ## 1. Install and connect an App Builder workspace
 
@@ -71,53 +78,73 @@ bundle and is not intended to share a workspace CDN with an unrelated app.
 
 ## 2. Choose a connection configuration mode
 
-**Default: Extension Manager configuration.** Leave
+**Default: ACCS with the Assets host's IMS user identity.** Leave
 `ASSETS_COMMERCE_CONNECTIONS='{}'` in [.env.example](.env.example). After the
-one-time app deployment, set `commerceUrl` and `commerceToken` using Extension
-Manager's **Configure > Add variable** mechanism (see step 4). You can add or
-change the instance URL, token, store view, and DAM folder there without editing
+one-time app deployment, set `commerceUrl` using Extension Manager's
+**Configure > Add variable** mechanism (see step 4). Include the ACCS tenant ID
+in the URL. You can change the instance, store view, and DAM folder without editing
 `.env`, running a build, or deploying an action.
 
-**Credential visibility:** Extension Manager variables are delivered to the
-extension in the user's browser; they are **not a secret store**. Users who can
-run the panel can inspect the Commerce token. Use a dedicated, least-privilege
-catalog integration token and rotate it in Extension Manager when necessary.
-Do not use a personal admin token, IMS token, or credential with write access.
-If your Commerce ACL cannot provide a suitably restricted credential, use a
-read-only gateway or the optional server-side mode below instead.
+### Does being signed in to AEM remove the need for another token?
 
-### Optional: server-side profiles
+**Only if the existing token is authorized for ACCS.** A shared IMS organization
+or SSO session is not an authorization grant across products. ACCS requires
+`commerce.accs`, the appropriate Commerce-enabled OAuth client, and the user's
+Commerce catalog permissions. The app reads a fresh host identity for every
+request and lets ACCS enforce that authorization.
 
-For tokens that must remain server-only, edit `ASSETS_COMMERCE_CONNECTIONS` in
-`.env` using this map keyed by a public connection identifier:
+The host controls its OAuth client and scopes. Registering this extension,
+setting `commerceClientId`, or adding a Commerce API to a separate Console project
+does **not** add scopes to an already-issued AEM host token. The app does not
+silently exchange, elevate, or fall back from that user token to a service account.
+If Commerce returns 401/403, the panel explains the requirements.
+
+If your Assets host does not supply a Commerce-authorized token, use an explicit
+server-side profile below. This creates a separate Commerce-scoped token
+automatically; users do not copy, store or renew it in Extension Manager.
+The extension does not implement a separate interactive Commerce OAuth login.
+
+### Optional: ACCS server-to-server profile
+
+1. Configure OAuth Server-to-Server credentials for the Commerce API in Adobe
+   Developer Console, with access to the intended Commerce environment and
+   least-privilege catalog read permissions.
+2. Edit `ASSETS_COMMERCE_CONNECTIONS` in `.env` using this map:
 
 ```json
 {
-  "my-store": {
+  "accs-service": {
+    "commerceType": "accs",
+    "authMode": "server",
     "imsOrg": "YOUR_ORG@AdobeOrg",
     "aemAuthorUrl": "https://author-p123-e456.adobeaemcloud.com",
     "productsRoot": "/content/dam/products",
-    "commerceUrl": "https://commerce.example.com",
+    "commerceUrl": "https://na1-sandbox.api.commerce.adobe.com/YOUR_TENANT_ID",
     "storeCodes": ["default", "fr"],
-    "commerceToken": "YOUR_CATALOG_INTEGRATION_TOKEN"
+    "commerceClientId": "YOUR_COMMERCE_OAUTH_CLIENT_ID",
+    "commerceClientSecret": "YOUR_SERVER_ONLY_OAUTH_CLIENT_SECRET"
   }
 }
 ```
 
-The Commerce URL is the installation's base URL, **not** `/graphql`, `/admin`,
-or `/rest`. Subdirectory installations are supported, for example
-`https://commerce.example.com/shop`. The adapter appends
-`/rest/{storeCode}/V1/products`.
+3. Deploy the action, then set `connectionId=accs-service` in Extension Manager.
+   Do not copy the JSON or client secret into Extension Manager.
 
-Add a second entry such as `another-store` for another Commerce instance, with
-its own token, IMS organization, AEM author, and allowed store codes. Only
-authorized users of the configured AEM subtree can use that profile.
+The action obtains tokens from Adobe IMS using `client_credentials` and the
+documented scopes, including `commerce.accs`. Tokens are cached only in server
+memory, renewed 60 seconds before expiry, and renewed once if a catalog GET
+returns 401. Failed token requests are not cached. Cache entries are isolated by
+tenant, organization, client ID and client secret.
 
-In this optional mode, `connectionId` selects a profile. Its token cannot be
-overridden or redirected using browser configuration. Adding a server-only
-profile or rotating its token requires updating the server profile and
-redeploying its action. This restriction does **not** apply to the default
-Extension Manager mode.
+Profiles bind the Commerce destination, organization, AEM author, store views
+and asset subtree. Credentials cannot be redirected or overridden by browser
+configuration. Adding a server-only profile or rotating its client secret
+requires updating the profile and redeploying the action; ordinary selection of
+existing profiles/store views/folder subtrees does not.
+
+A service account controls Commerce catalog access in this explicit mode, not
+each user's Commerce role. Any user who can read the allowed AEM asset can query
+that profile's catalog. All AEM reads/writes still use the actual user's token.
 
 Only configure public HTTPS destinations you control. Direct-mode Commerce
 requests reject private/reserved IP addresses during DNS resolution, pin the
@@ -162,49 +189,83 @@ for **every request**. Save the Extension Manager configuration and reopen the
 panel to ensure the host supplies the updated values.
 Use plain text values, not JSON-encoded strings.
 
-### Direct configuration (default, no server profile)
+### ACCS configuration (default, no stored Commerce token)
 
 | Key | Required | Example | Behavior |
 | --- | --- | --- | --- |
-| `commerceUrl` | Yes | `https://commerce.example.com` | Commerce installation base URL, optionally including its subdirectory. |
-| `commerceToken` | Yes | Your restricted catalog integration token | Browser-visible bearer credential, sent only to that Commerce instance over HTTPS. |
+| `commerceType` | No | `accs` | Defaults to ACCS for new tokenless configurations. |
+| `commerceUrl` | Yes | `https://na1-sandbox.api.commerce.adobe.com/YOUR_TENANT_ID` | ACCS API base including the tenant ID, without `/V1`, `/rest` or a store code. |
 | `storeCode` | No | `fr` | Commerce store view; defaults to `default`. |
 | `productsRoot` | No | `/content/dam/products/shoes` | DAM subtree for asset linking; defaults to `/content/dam/products`. AEM user permissions still apply. |
+| `commerceClientId` | No | Your token's OAuth client ID | Defaults to the host API key. An override must identify the client that issued the user token; it does not grant scopes. |
 
-Omit/remove `connectionId` to use this mode. The AEM author URL and Adobe user
-identity come from the Assets host automatically. Direct mode only accepts AEM
+Omit/remove `connectionId` and `commerceToken` to use this mode. The AEM author
+URL, IMS organization and user identity come from the Assets host automatically.
+Direct mode only accepts AEM
 Cloud Service author hosts (`author-p<program>-e<environment>.adobeaemcloud.com`);
-you do not need to configure an IMS organization or AEM URL.
+the IMS token is forwarded only to AEM and validated Adobe Commerce API hosts.
+Custom domains or gateways are not accepted in ACCS mode, to avoid forwarding
+Adobe credentials to arbitrary destinations.
 
 [extension-manager.example.json](extension-manager.example.json) is a reference,
-not an Extension Manager import payload. Never commit a populated token to Git.
-The panel displays an actionable setup error if the URL or token is missing.
+not an Extension Manager import payload. Do not put IMS access/refresh tokens
+or OAuth client secrets into Extension Manager. The frontend and action reject
+`commerceClientSecret` supplied through browser configuration.
 
 ### Optional server-profile configuration
 
 | Key | Required | Example | Behavior |
 | --- | --- | --- | --- |
-| `connectionId` | Yes | `my-store` | Selects the server profile and its bound credentials. |
-| `commerceUrl` | No | `https://commerce.example.com` | Must match the selected profile; omit to use its URL. |
+| `connectionId` | Yes | `accs-service` | Selects the server profile and its bound credentials/authentication mode. |
+| `commerceUrl` | No | The profile's ACCS base URL | Must match the selected profile; omit to use its URL. |
+| `commerceType` | No | `accs` | Must match the selected profile; normally omit. |
+| `commerceClientId` | No | The profile's OAuth client ID | Must match the selected profile; normally omit. |
 | `storeCode` | No | `fr` | Must be allowed by the profile; defaults to its first code. |
 | `productsRoot` | No | `/content/dam/products/shoes` | May narrow but never broaden the profile's root. |
 
 Do not set `commerceToken` in this mode; the frontend does not forward it.
 An invalid `connectionId` displays an error rather than falling back to direct
-mode. Remove `connectionId` explicitly to switch modes.
+mode. Remove `connectionId` explicitly to switch modes. A profile can also use
+`authMode: "user"` to bind a permitted ACCS tenant while retaining user identity.
+
+### Legacy Adobe Commerce PaaS
+
+For PaaS, set these Extension Manager values:
+
+```json
+{
+  "commerceType": "paas",
+  "commerceUrl": "https://commerce.example.com",
+  "commerceToken": "YOUR_RESTRICTED_CATALOG_INTEGRATION_TOKEN",
+  "storeCode": "default",
+  "productsRoot": "/content/dam/products"
+}
+```
+
+The adapter appends `/rest/{storeCode}/V1/products`; installation subdirectories
+such as `https://commerce.example.com/shop` are supported. Existing configurations
+and profiles containing `commerceToken` but no `commerceType` retain PaaS behavior.
+New configurations without a token default to ACCS.
+
+**PaaS credential visibility:** Extension Manager variables are browser-visible,
+not a secret store. Use a dedicated restricted token, never a personal admin
+token. Standard Catalog > Products ACLs can also grant writes; use a read-only
+ACL/gateway if needed. Alternatively keep a PaaS token in a server profile using
+`commerceType: "paas"` and `commerceToken` instead of ACCS OAuth credentials.
 
 ### Point the extension at another instance
 
 1. In Extension Manager, remove `connectionId` if set.
-2. Set `commerceUrl` and `commerceToken` for the new instance; set its `storeCode`
-   and `productsRoot` as needed, then save the configuration.
+2. Set `commerceType=accs` and `commerceUrl` for the new ACCS tenant; set its
+   `storeCode` and `productsRoot` as needed. Remove any legacy `commerceToken`.
+   Save the configuration.
 3. Reopen the panel, search a known SKU, and verify it comes from the new
    instance before saving a mapping.
 
-No build, action redeployment, catalog import, or `.env` update is required.
-Rotate a direct-mode token by updating `commerceToken` in the same way.
-If using server profiles instead, onboard the instance on the server first,
-then select its `connectionId`.
+No build, action redeployment, catalog import, or `.env` update is required for
+user-mode configuration changes. The current IMS user/client must be authorized
+for the selected tenant. If using server profiles, onboard the instance on the
+server first, then select its `connectionId`.
 
 ## 5. Prepare AEM metadata and synchronization
 
@@ -261,10 +322,11 @@ npm run test:coverage
 npm run build
 ```
 
-Tests cover direct Extension Manager connections and token rotation without
-server configuration, optional trusted-profile selection, public DNS enforcement,
-REST query
-encoding, hidden variants, SKU case, credential separation, org/author/path
+Tests cover ACCS URL/header conventions, host IMS reuse and authorization errors,
+server token issuance/expiry/renewal/cache isolation, complete panel API-to-action
+search/save flows, PaaS backwards compatibility, runtime configuration changes,
+trusted profiles, public DNS enforcement, REST query encoding, hidden variants,
+SKU case, credential separation, org/author/path
 boundaries, AEM permission checks before catalog access, typed metadata writes,
 read-back failure, conflict handling, simplified UI and cancellation.
 Tests mock network and AEM host APIs; they do not prove a customer's live
@@ -277,8 +339,10 @@ Before enabling in production, preview in your environment and verify:
 - Confirm title, description, approval and localized alt text are unchanged.
 - Wait for native synchronization and check the Commerce product gallery.
 - Test unlinking, insufficient AEM permissions, and invalid connection details.
-- Change the Commerce URL/token in Extension Manager without redeploying, then
+- Change the ACCS tenant/store in Extension Manager without redeploying, then
   confirm search uses the new instance.
+- Confirm missing Commerce scopes/roles produce an authorization error rather
+  than an empty catalog or implicit service-account fallback.
 - Test narrow panel widths, keyboard navigation, and light/dark themes.
 
 ### Operational details
@@ -286,15 +350,18 @@ Before enabling in production, preview in your environment and verify:
 The Runtime gateway validates Adobe authentication (`require-adobe-auth`).
 The action uses the caller's token to read the selected asset **before any
 Commerce request**; a caller-supplied
-organization header alone is not authorization. Any user who can read the allowed
-AEM asset and has the configured token can search the Commerce catalog. Saving additionally
-requires AEM write permission. Restrict the DAM root accordingly.
+organization header alone is not authorization. ACCS user-mode catalog access
+additionally requires Commerce authorization for that IMS user/client. Explicit
+server profiles use their service account's Commerce permissions. Saving
+additionally requires AEM write permission. Restrict the DAM root accordingly.
 Optional server profiles additionally bind the organization, AEM author, store
 views, folder and Commerce destination. Direct-mode folder configuration is not
 an access-control boundary: AEM ACLs enforce actual access.
 Manifest `final: true` prevents callers from replacing injected server inputs.
-Direct-mode Commerce tokens travel in authenticated HTTPS request bodies to the
-action and are not returned or logged by app code. They remain visible in browser
+User-mode IMS tokens travel in authenticated HTTPS headers and are not stored by
+the app. Service client secrets go only to the fixed Adobe IMS token endpoint;
+service tokens go only to validated ACCS endpoints. App code never logs or returns
+these credentials. Legacy direct-mode PaaS tokens remain visible in browser
 configuration/network tools; apply your Runtime activation-retention policy too.
 
 AEM metadata uses Sling POST and read-back verification on the selected asset,
@@ -306,7 +373,8 @@ AEM administrator to authorize it; no privileged fallback is attempted.
 Revisions detect edits to the four Commerce properties since load, but the
 read-before-write check is **not atomic compare-and-swap**. Avoid concurrent edits
 to the same asset. A timeout/read-back failure can occur after a successful write:
-reload before retrying. Failed requests are never retried automatically.
+reload before retrying. AEM mutations are never retried automatically. Only an
+ACCS server-mode catalog GET rejected with 401 is retried once with a fresh token.
 All network calls have timeouts and reject redirects.
 
 To roll back, disable the standalone BYO extension for that environment. Disabling
@@ -320,3 +388,6 @@ No database, S2S AEM credentials, custom Commerce schema, or catalog import is n
 - [Default SKU matching](https://experienceleague.adobe.com/en/docs/commerce/aem-assets-integration/synchronize/default-match)
 - [AEM Assets Integration setup](https://experienceleague.adobe.com/en/docs/commerce/aem-assets-integration/get-started/setup-synchronization)
 - [Commerce REST search criteria](https://developer.adobe.com/commerce/webapi/rest/use-rest/performing-searches/)
+- [ACCS REST URL and Store header conventions](https://developer.adobe.com/commerce/webapi/rest/)
+- [ACCS user authentication and required scopes](https://developer.adobe.com/commerce/webapi/rest/authentication/user)
+- [ACCS server-to-server authentication](https://developer.adobe.com/commerce/webapi/rest/authentication/server-to-server)
